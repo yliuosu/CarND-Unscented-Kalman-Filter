@@ -7,6 +7,8 @@ using Eigen::MatrixXd;
 using Eigen::VectorXd;
 using std::vector;
 
+#define EPS 0.001 // a small number
+
 /**
  * Initializes Unscented Kalman filter
  */
@@ -82,10 +84,19 @@ UKF::UKF() {
 UKF::~UKF() {}
 
 /**
- * @param {MeasurementPackage} meas_package The latest measurement data of
+ *  Angle normalization to [-Pi, Pi]
+ */
+void UKF::NormAng(double *ang) {
+    while (*ang > M_PI) *ang -= 2. * M_PI;
+    while (*ang < -M_PI) *ang += 2. * M_PI;
+}
+
+
+/**
+ * @param {MeasurementPackage} measurement_pack The latest measurement data of
  * either radar or laser.
  */
-void UKF::ProcessMeasurement(MeasurementPackage meas_package) {
+void UKF::ProcessMeasurement(MeasurementPackage measurement_pack) {
 	
 	/**
 	TODO:
@@ -93,79 +104,66 @@ void UKF::ProcessMeasurement(MeasurementPackage meas_package) {
 	measurements.
 	*/
   
-	// skip predict/update if sensor type is ignored
-	if ((meas_package.sensor_type_ == MeasurementPackage::RADAR && use_radar_) ||
-      (meas_package.sensor_type_ == MeasurementPackage::LASER && use_laser_)) {
+	if (!is_initialized_) {
+		// Initial covariance matrix
+		P_ << 1, 0, 0, 0, 0,
+			  0, 1, 0, 0, 0,
+			  0, 0, 1, 0, 0,
+			  0, 0, 0, 1, 0,
+			  0, 0, 0, 0, 1;
+		if (measurement_pack.sensor_type_ == MeasurementPackage::RADAR) {
+		  // Convert radar from polar to cartesian coordinates and initialize state.
+		  float rho = measurement_pack.raw_measurements_[0]; // range
+		  float phi = measurement_pack.raw_measurements_[1]; // bearing
+		  float rho_dot = measurement_pack.raw_measurements_[2]; // velocity of rho
+		  // Coordinates convertion from polar to cartesian
+		  float px = rho * cos(phi); 
+		  float py = rho * sin(phi);
+		  float vx = rho_dot * cos(phi);
+		  float vy = rho_dot * sin(phi);
+		  float v  = sqrt(vx * vx + vy * vy);
+		  x_ << px, py, v, 0, 0;
+		}
+		else if (measurement_pack.sensor_type_ == MeasurementPackage::LASER) {
+		  // We don't know velocities from the first measurement of the LIDAR, so, we use zeros
+		  x_ << measurement_pack.raw_measurements_[0], measurement_pack.raw_measurements_[1], 0, 0, 0;
+		  // Deal with the special case initialisation problems
+		  if (fabs(x_(0)) < EPS and fabs(x_(1)) < EPS){
+			x_(0) = EPS;
+			x_(1) = EPS;
+		  }
+		}
     
-		/*****************************************************************************
-		*  Initialization
-		****************************************************************************/
-		if (!is_initialized_) {
-			/**
-			TODO:
-			* Initialize the state x_ with the first measurement.
-			* Create the covariance matrix.
-			* Remember: you'll need to convert radar from polar to cartesian coordinates.
-			*/
-			/**
-			Initialize state.
-			*/
+		// Initialize weights
+		weights_(0) = lambda_ / (lambda_ + n_aug_);
+		for (int i = 1; i < weights_.size(); i++) {
+			weights_(i) = 0.5 / (n_aug_ + lambda_);
+		}
 
-			// first measurement
-			x_ << 1, 1, 1, 1, 0.1;
-
-			// init covariance matrix
-			P_ << 0.15, 0, 0, 0, 0,
-				   0, 0.15, 0, 0, 0,
-				   0, 0, 1, 0, 0,
-				   0, 0, 0, 1, 0,
-				   0, 0, 0, 0, 1;
-
-			// init timestamp
-			time_us_ = meas_package.timestamp_;
-
-			if (meas_package.sensor_type_ == MeasurementPackage::LASER && use_laser_) {
-
-				x_(0) = meas_package.raw_measurements_(0);
-				x_(1) = meas_package.raw_measurements_(1);
+		// Save the initiall timestamp for dt calculation
+		time_us_ = measurement_pack.timestamp_;
+		// Done initializing, no need to predict or update
+		is_initialized_ = true;
+		 return;
+	}
 	
-      		} else if (meas_package.sensor_type_ == MeasurementPackage::RADAR && use_radar_) {
-				/**
-				Convert radar from polar to cartesian coordinates and initialize state.
-				*/
-				float ro = meas_package.raw_measurements_(0);
-				float phi = meas_package.raw_measurements_(1);
-				float ro_dot = meas_package.raw_measurements_(2);
-				x_(0) = ro * cos(phi);
-				x_(1) = ro * sin(phi);
-      		}
-
-     		// done initializing, no need to predict or update
-      		is_initialized_ = true;
-			  return;
-    	}
-		
-		/*****************************************************************************
-    		*  Prediction
-    	****************************************************************************/
-    	//compute the time elapsed between the current and previous measurements
-   		float dt = (meas_package.timestamp_ - time_us_) / 1000000.0;	//dt - expressed in seconds
-    	time_us_ = meas_package.timestamp_;
-
-    	Prediction(dt);
-
-    	/*****************************************************************************
-    		*  Update
-    	****************************************************************************/
-
-    	if (meas_package.sensor_type_ == MeasurementPackage::LASER) {
-      		UpdateLidar(meas_package);
-    		}
-    	else if (meas_package.sensor_type_ == MeasurementPackage::RADAR) {
-      		UpdateRadar(meas_package);
-    	}
-  	}
+	// Calculate the timestep between measurements in seconds
+	double dt = (measurement_pack.timestamp_ - time_us_);
+	dt /= 1000000.0; // convert micros to s
+	time_us_ = measurement_pack.timestamp_;
+	Prediction(dt);
+	
+	if (measurement_pack.sensor_type_ == MeasurementPackage::RADAR && use_radar_) {
+		UpdateRadar(measurement_pack);
+	}
+	
+	if (measurement_pack.sensor_type_ == MeasurementPackage::LASER && use_laser_) {
+		UpdateLidar(measurement_pack);
+	}
 }
+
+
+
 
 /**
  * Predicts sigma points, the state, and the state covariance matrix.
@@ -408,10 +406,8 @@ void UKF::UpdateLidar(MeasurementPackage meas_package) {
 void UKF::UpdateRadar(MeasurementPackage meas_package) {
   /**
   TODO:
-
   Complete this function! Use radar data to update the belief about the object's
   position. Modify the state vector, x_, and covariance, P_.
-
   You'll also need to calculate the radar NIS.
   */
   
