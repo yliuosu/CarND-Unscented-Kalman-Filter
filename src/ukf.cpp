@@ -281,39 +281,26 @@ void UKF::UpdateLidar(MeasurementPackage meas_package) {
  * @param {MeasurementPackage} meas_package
  */
 void UKF::UpdateRadar(MeasurementPackage meas_package) {
-  /**
-  TODO:
-  Complete this function! Use radar data to update the belief about the object's
-  position. Modify the state vector, x_, and covariance, P_.
-  You'll also need to calculate the radar NIS.
-  */
-  
-  //extract measurement as VectorXd
-  VectorXd z = meas_package.raw_measurements_;
-
-  //set measurement dimension, radar can measure r, phi, and r_dot
-  int n_z = 3;
-
-  //create matrix for sigma points in measurement space
-  MatrixXd Zsig = MatrixXd(n_z, 2 * n_aug_ + 1);
-
-  //transform sigma points into measurement space
-  for (int i = 0; i < 2 * n_aug_ + 1; i++) {  //2n+1 simga points
-
-    // extract values for better readibility
-    double p_x = Xsig_pred_(0, i);
-    double p_y = Xsig_pred_(1, i);
-    double v   = Xsig_pred_(2, i);
-    double yaw = Xsig_pred_(3, i);
-
-    double v1 = cos(yaw)*v;
-    double v2 = sin(yaw)*v;
-
-    // measurement model
-    Zsig(0, i) = sqrt(p_x*p_x + p_y*p_y);                        //r
-    Zsig(1, i) = atan2(p_y, p_x);                                 //phi
-    Zsig(2, i) = (p_x*v1 + p_y*v2) / sqrt(p_x*p_x + p_y*p_y);   //r_dot
-  }
+  	// Set measurement dimension, radar can measure r, phi, and r_dot
+  	int n_z = 3;
+  	// Create matrix for sigma points in measurement space
+  	MatrixXd Zsig = MatrixXd(n_z, n_sig_);
+  	// Transform sigma points into measurement space
+  	for (int i = 0; i < n_sig_; i++) {
+    	// extract values for better readibility
+    	double p_x = Xsig_pred_(0,i);
+    	double p_y = Xsig_pred_(1,i);
+    	double v  = Xsig_pred_(2,i);
+    	double yaw = Xsig_pred_(3,i);
+    	double v1 = cos(yaw)*v;
+    	double v2 = sin(yaw)*v;
+    	// Measurement model
+    	Zsig(0,i) = sqrt(p_x*p_x + p_y*p_y);          //r
+    	Zsig(1,i) = atan2(p_y,p_x);                   //phi
+    	Zsig(2,i) = (p_x*v1 + p_y*v2 ) / Zsig(0,i);   //r_dot
+  	}
+	UpdateUKF(meas_package, Zsig, n_z);
+ }
 
   //mean predicted measurement
   VectorXd z_pred = VectorXd(n_z);
